@@ -1,0 +1,33 @@
+// Place your key bindings in this file to override the defaults
+[
+    {
+        "key": "ctrl+shift+r",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: Run Scene at Cursor",
+        "when": "editorTextFocus && editorLangId == python"
+    },
+    {
+        "key": "ctrl+shift+s",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: Snapshot at Cursor",
+        "when": "editorTextFocus && editorLangId == python"
+    },
+    {
+        "key": "ctrl+alt+l",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: List Scenes",
+        "when": "editorTextFocus && editorLangId == python"
+    },
+    {
+        "key": "ctrl+alt+w",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: Dev Watch Mode",
+        "when": "editorTextFocus && editorLangId == python"
+    },
+    {
+        "key": "ctrl+alt+f",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: Render Full Scene (High Quality)",
+        "when": "editorTextFocus && editorLangId == python"
+    }
+]

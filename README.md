@@ -264,3 +264,85 @@ def construct(self):
 "Scene has no animations?"                 → Cmd+Shift+R  (auto-detects → shows snapshot or skips)
 "Ship it"                                  → python concat_render.py ... --quality qh
 ```
+
+---
+
+## Shortcut Behavior Reference
+
+Detailed behavior of each shortcut depending on cursor position and scene content.
+
+### `Ctrl+Shift+R` — Run Scene at Cursor
+
+Renders the scene as **video** and sends it to the mpv preview window (looping).
+
+| Cursor Position | Scene Content | Behavior | mpv Shows |
+|---|---|---|---|
+| On `class MyScene(Scene):` line | Has animations | Renders **full scene** as video | Looping video of entire scene |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **snapshot** (fallback) | Still image of all added content |
+| On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
+| Inside scene, on/near animation | Has animations | Renders **targeted video** of animations `[idx, idx+2]` | Looping video of 2-3 animations around cursor |
+| Inside scene, any line | No animations, has `self.add()` | Renders **snapshot** (fallback) | Still image of all added content |
+| Inside scene, any line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
+
+> **Note:** Animation index is determined by the `self.play()` / `self.wait()` call at or just before the cursor line. `self.add()` calls are not animations and do not affect the index.
+
+---
+
+### `Ctrl+Shift+S` — Snapshot at Cursor
+
+Renders the scene as a **still image** (last frame as PNG) and sends it to mpv.
+
+| Cursor Position | Scene Content | Behavior | mpv Shows |
+|---|---|---|---|
+| On `class MyScene(Scene):` line | Has animations | Renders **full scene** last frame (`-s`) | Still image after all animations complete |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **full scene** last frame (`-s`) | Still image of all added content |
+| On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
+| Inside scene, on/near animation | Has animations | Renders **up to cursor's animation** (`-n 0,{idx} -s`) | Still image after animations 0 through idx |
+| Inside scene, any line | No animations, has `self.add()` | Renders **full scene** last frame (`-s`) | Still image of all added content |
+| Inside scene, any line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
+
+> **Important caveat:** With `-n 0,{idx}`, manim executes all code (including `self.add()`) between animation `idx` and the *next* animation call. The `EndSceneEarlyException` is only triggered when the next `self.play()` / `self.wait()` is encountered. Non-animation code after the last rendered animation still runs. See the [checkpoint pattern](#checkpoint-pattern-for-setup-snapshots) for a workaround.
+
+---
+
+### `Ctrl+Alt+L` — List Scenes
+
+Lists all Scene classes in the current file with metadata. **Cursor position does not matter** — it always scans the entire file.
+
+| Output | Description |
+|---|---|
+| Scene name | Each `Scene` subclass found in the file |
+| Line range | Start and end lines of the class definition |
+| Animation count | Number of `self.play()`, `self.wait()` calls in `construct()` |
+| Section count | Number of `self.next_section()` calls |
+| Section names | Names and line numbers of each section |
+
+No rendering occurs. Nothing is sent to mpv.
+
+---
+
+### `Ctrl+Alt+W` — Dev Watch Mode
+
+Watches the current file for changes and **auto-renders on every save**. Runs as a background process.
+
+| Aspect | Behavior |
+|---|---|
+| Trigger | Every file save (debounced at 1.5s) |
+| Active scene | First scene in file by default, or specified via `--scene` flag |
+| Configuration | Edit `.mce_dev_state.json` in the scene directory to change scene, quality, or mode |
+| Modes | `"full"` (render full scene), `"snapshot"` (last frame), `"range"` (animation range) |
+| Preview | Automatically sent to mpv on each render |
+| Stop | `Ctrl+C` in the terminal |
+
+---
+
+### `Ctrl+Alt+F` — Render Full Scene (High Quality)
+
+Prompts for a scene name and renders it at **high quality** (`-qh`, 1080p 60fps by default).
+
+| Aspect | Behavior |
+|---|---|
+| Scene selection | Prompted via input dialog (not cursor-based) |
+| Quality | High quality (`-qh`) by default, configurable |
+| Preview | Full render sent to mpv |
+| Use case | Final review before production render |
