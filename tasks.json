@@ -1,0 +1,132 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "MCE: Run Scene at Cursor",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/python",
+            "args": [
+                "${workspaceFolder}/mce_dev.py",
+                "run_scene",
+                "${file}",
+                "${lineNumber}"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "MCE: Snapshot at Cursor",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/python",
+            "args": [
+                "${workspaceFolder}/mce_dev.py",
+                "snapshot",
+                "${file}",
+                "${lineNumber}"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "MCE: List Scenes",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/python",
+            "args": [
+                "${workspaceFolder}/mce_dev.py",
+                "list_scenes",
+                "${file}"
+            ],
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "MCE: Dev Watch Mode",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/python",
+            "args": [
+                "${workspaceFolder}/mce_dev.py",
+                "dev",
+                "${file}"
+            ],
+            "group": "none",
+            "isBackground": true,
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "MCE: Render Full Scene (High Quality)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/python",
+            "args": [
+                "${workspaceFolder}/mce_dev.py",
+                "render_full",
+                "${file}",
+                "${input:sceneName}",
+                "--quality",
+                "qh"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "MCE: Render Animation Range",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/python",
+            "args": [
+                "${workspaceFolder}/mce_dev.py",
+                "render_range",
+                "${file}",
+                "${input:sceneName}",
+                "${input:animStart}",
+                "${input:animEnd}"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "sceneName",
+            "description": "Scene class name",
+            "type": "promptString",
+            "default": ""
+        },
+        {
+            "id": "animStart",
+            "description": "Start animation index",
+            "type": "promptString",
+            "default": "0"
+        },
+        {
+            "id": "animEnd",
+            "description": "End animation index",
+            "type": "promptString",
+            "default": "5"
+        }
+    ]
+}

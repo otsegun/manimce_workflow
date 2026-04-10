@@ -1,0 +1,16 @@
+manim/media/
+*exports/
+*tmp/
+
+.idea
+
+postproduction/rendered-files
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.code-workspace
+
+
+*tmpTex
