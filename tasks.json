@@ -20,6 +20,25 @@
             "problemMatcher": []
         },
         {
+            "label": "MCE: Run Scene at Cursor (Centered)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/python",
+            "args": [
+                "${workspaceFolder}/mce_dev.py",
+                "run_scene",
+                "${file}",
+                "${lineNumber}",
+                "--centered"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "MCE: Snapshot at Cursor",
             "type": "shell",
             "command": "${workspaceFolder}/.venv/bin/python",

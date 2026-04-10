@@ -30,6 +30,7 @@ import json
 import time
 import socket
 from pathlib import Path
+from contextlib import contextmanager
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -388,6 +389,133 @@ def has_visual_content(filepath: str, scene_name: str) -> bool:
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Auto-Checkpoint: Exact-Line Snapshot Rendering
+# ──────────────────────────────────────────────────────────────────────
+
+def _find_statement_end_line(construct_node: ast.FunctionDef,
+                             line_number: int) -> int | None:
+    """
+    Find the end line of the innermost statement containing line_number
+    within the construct() method. Returns None if no statement found.
+    """
+    best = None
+    best_span = float("inf")
+
+    for node in ast.walk(construct_node):
+        if not hasattr(node, "lineno") or not hasattr(node, "end_lineno"):
+            continue
+        if node is construct_node:
+            continue
+        end = node.end_lineno or node.lineno
+        if node.lineno <= line_number <= end:
+            span = end - node.lineno
+            # Prefer the outermost statement-level node that still
+            # contains the cursor, not sub-expressions
+            if isinstance(node, ast.stmt) and span < best_span:
+                best = node
+                best_span = span
+
+    if best:
+        return best.end_lineno or best.lineno
+    return None
+
+
+def create_checkpoint_file(filepath: str, line_number: int,
+                           scene_name: str) -> str | None:
+    """
+    Create a temp copy of the scene file with a checkpoint injected
+    after the cursor line. Injects:
+        self.wait(0.01)  # mce_auto_checkpoint
+        return  # mce_auto_checkpoint
+
+    This causes construct() to exit immediately after the cursor line,
+    so a snapshot (-s) captures the exact scene state at that point.
+
+    Returns the temp file path, or None if injection failed.
+    """
+    with open(filepath, "r") as f:
+        lines = f.readlines()
+
+    source = "".join(lines)
+    tree = ast.parse(source)
+
+    # Find the construct() method of the target scene
+    construct_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == scene_name:
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "construct":
+                    construct_node = item
+                    break
+            break
+
+    if not construct_node:
+        return None
+
+    # Find the end line of the statement at the cursor
+    inject_after = _find_statement_end_line(construct_node, line_number)
+
+    if inject_after is None:
+        # Cursor might be on a blank/comment line — find the nearest
+        # statement above the cursor within construct()
+        for check_line in range(line_number, construct_node.lineno, -1):
+            result = _find_statement_end_line(construct_node, check_line)
+            if result is not None:
+                inject_after = result
+                break
+
+    if inject_after is None:
+        # Cursor is before any statements in construct — inject right
+        # after the def line
+        inject_after = construct_node.lineno
+
+    # Determine indentation from the construct body
+    # (first statement in construct, or default 8 spaces)
+    if construct_node.body:
+        first_stmt = construct_node.body[0]
+        indent = len(lines[first_stmt.lineno - 1]) - len(
+            lines[first_stmt.lineno - 1].lstrip()
+        )
+    else:
+        indent = 8
+
+    indent_str = " " * indent
+    checkpoint_lines = (
+        f"{indent_str}self.wait(0.01)  # mce_auto_checkpoint\n"
+        f"{indent_str}return  # mce_auto_checkpoint\n"
+    )
+
+    # Inject after the target line
+    new_lines = lines[:inject_after] + [checkpoint_lines] + lines[inject_after:]
+
+    # Write temp file in the same directory (picks up same manim.cfg)
+    scene_dir = Path(filepath).parent
+    temp_name = f"._{Path(filepath).stem}_mce_checkpoint.py"
+    temp_path = scene_dir / temp_name
+    with open(temp_path, "w") as f:
+        f.writelines(new_lines)
+
+    return str(temp_path)
+
+
+@contextmanager
+def checkpoint_render(filepath: str, line_number: int, scene_name: str):
+    """
+    Context manager that creates a checkpoint temp file, yields it,
+    and cleans up after rendering (even on error).
+    """
+    tmp = create_checkpoint_file(filepath, line_number, scene_name)
+    try:
+        yield tmp
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Section Detection
 # ──────────────────────────────────────────────────────────────────────
 
@@ -505,8 +633,13 @@ def cmd_run_scene(args):
     # Zero-animation scene: snapshot fallback or skip
     if total_anims == 0:
         if has_visual_content(args.file, scene_name):
-            print("  No animations found, but scene has visual content -> rendering snapshot")
-            run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
+            print("  No animations found, but scene has visual content -> auto-checkpoint snapshot")
+            with checkpoint_render(args.file, args.line_number, scene_name) as tmp:
+                if tmp:
+                    run_manim(tmp, scene_name, extra_args=["-s"], quality="ql")
+                else:
+                    print("  WARNING: Checkpoint failed, falling back to full scene snapshot")
+                    run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
         else:
             print("  No animations and no visual content (no self.add()). Nothing to preview.")
         return
@@ -521,11 +654,18 @@ def cmd_run_scene(args):
 
     # Cursor inside scene -> targeted animation range
     anim_idx = animation_index_at_line(args.file, scene_name, args.line_number)
-    print(f"  Animation index at cursor: {anim_idx} (of {total_anims - 1})")
-    end_idx = min(anim_idx + 2, total_anims - 1)
+    centered = getattr(args, "centered", False)
+    if centered:
+        start_idx = max(anim_idx - 1, 0)
+        end_idx = min(anim_idx + 1, total_anims - 1)
+        print(f"  Animation index at cursor: {anim_idx} (of {total_anims - 1}) [centered range]")
+    else:
+        start_idx = anim_idx
+        end_idx = min(anim_idx + 2, total_anims - 1)
+        print(f"  Animation index at cursor: {anim_idx} (of {total_anims - 1})")
     run_manim(
         args.file, scene_name,
-        extra_args=["-n", f"{anim_idx},{end_idx}"],
+        extra_args=["-n", f"{start_idx},{end_idx}"],
         quality=args.quality
     )
 
@@ -551,8 +691,13 @@ def cmd_snapshot(args):
     # Zero-animation scene
     if total_anims == 0:
         if has_visual_content(args.file, scene_name):
-            print("  No animations, but scene has visual content -> full scene snapshot")
-            run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
+            print("  No animations, has visual content -> auto-checkpoint snapshot")
+            with checkpoint_render(args.file, args.line_number, scene_name) as tmp:
+                if tmp:
+                    run_manim(tmp, scene_name, extra_args=["-s"], quality="ql")
+                else:
+                    print("  WARNING: Checkpoint failed, falling back to full scene snapshot")
+                    run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
         else:
             print("  No animations and no visual content (no self.add()). Nothing to preview.")
         return
@@ -565,14 +710,20 @@ def cmd_snapshot(args):
             run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
             return
 
-    # Cursor inside scene -> snapshot up to the animation at cursor
-    anim_idx = animation_index_at_line(args.file, scene_name, args.line_number)
-    print(f"  Snapshot up to animation {anim_idx} (of {total_anims - 1})")
-    run_manim(
-        args.file, scene_name,
-        extra_args=["-n", f"0,{anim_idx}", "-s"],
-        quality="ql"
-    )
+    # Cursor inside scene -> auto-checkpoint snapshot at exact cursor line
+    print(f"  Auto-checkpoint snapshot at line {args.line_number}")
+    with checkpoint_render(args.file, args.line_number, scene_name) as tmp:
+        if tmp:
+            run_manim(tmp, scene_name, extra_args=["-s"], quality="ql")
+        else:
+            # Fallback to the old -n approach if checkpoint creation fails
+            anim_idx = animation_index_at_line(args.file, scene_name, args.line_number)
+            print(f"  WARNING: Checkpoint failed, falling back to -n 0,{anim_idx} -s")
+            run_manim(
+                args.file, scene_name,
+                extra_args=["-n", f"0,{anim_idx}", "-s"],
+                quality="ql"
+            )
 
 
 def cmd_render_range(args):
@@ -748,6 +899,8 @@ all subsequent renders (video and images, same window).
     p.add_argument("file", help="Path to .py file")
     p.add_argument("line_number", type=int, help="Current cursor line number")
     p.add_argument("--quality", default="ql", choices=QUALITY_FLAGS.keys())
+    p.add_argument("--centered", action="store_true",
+                   help="Center animation range around cursor (1 before + 1 after)")
     p.set_defaults(func=cmd_run_scene)
 
     # snapshot

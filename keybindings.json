@@ -7,6 +7,12 @@
         "when": "editorTextFocus && editorLangId == python"
     },
     {
+        "key": "ctrl+shift+d",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: Run Scene at Cursor (Centered)",
+        "when": "editorTextFocus && editorLangId == python"
+    },
+    {
         "key": "ctrl+shift+s",
         "command": "workbench.action.tasks.runTask",
         "args": "MCE: Snapshot at Cursor",

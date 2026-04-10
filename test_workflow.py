@@ -23,13 +23,13 @@ class TestTargeted(Scene):
         b = Square(color=RED)
         c = Triangle(color=GREEN)
 
-        # self.play(Create(a))                    # anim 0
-        # self.play(a.animate.shift(LEFT * 2))    # anim 1
-        # self.play(Create(b))                    # anim 2
-        # self.play(b.animate.shift(RIGHT * 2))   # anim 3
-        # self.play(Create(c))                    # anim 4
-        # self.play(c.animate.shift(UP * 2))      # anim 5
-        # self.wait(1)                            # anim 6
+        self.play(Create(a))  # anim 0
+        self.play(a.animate.shift(LEFT * 2))  # anim 1
+        self.play(Create(b))  # anim 2
+        self.play(b.animate.shift(RIGHT * 2))  # anim 3
+        self.play(Create(c))  # anim 4
+        self.play(c.animate.shift(UP * 2))  # anim 5
+        self.wait(1)  # anim 6
 
 
 class TestStaticContent(Scene):
@@ -39,8 +39,8 @@ class TestStaticContent(Scene):
         a = Circle(color=BLUE)
         b = Square(color=RED).shift(RIGHT * 2)
         self.add(a)
-        self.wait(1)
-        self.wait(1)
+        # self.wait(1)
+        # self.wait(1)
         self.add(b)
 
 

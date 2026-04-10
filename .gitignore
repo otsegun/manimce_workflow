@@ -14,3 +14,6 @@ __pycache__/
 
 
 *tmpTex
+
+# Auto-checkpoint temp files
+._*_mce_checkpoint.py
