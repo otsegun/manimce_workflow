@@ -1,16 +1,16 @@
 # ManimCE Fast Development Workflow
 
-A highly optimized development workflow for ManimCE that approximates 3b1b's ManimGL interactive experience — tailored for illustration-heavy finance content production.
+A highly optimized development workflow for ManimCE that approximates 3b1b's ManimGL interactive experience — tailored for illustration-heavy content production.
 
 ## The Problem
 
-ManimCE's default workflow is: edit → render entire scene → wait 30-120s → watch → repeat. For a channel producing complex, illustration-heavy content, this loop kills iteration speed and creative flow.
+ManimCE's default workflow is: edit → render entire scene → wait 30-120s → watch → repeat. For a someone producing complex, illustration-heavy content, this loop kills iteration speed and creative flow.
 
-ManimGL solves this with live interactive reloading and `checkpoint_paste()`, but has poor SVG support and no manim-voiceover integration — dealbreakers for illustration-driven content.
+ManimGL solves this with live interactive reloading and `checkpoint_paste()`. This project is an attempt to replicate that interactive experiences as much as possible using ManimCE. 
 
 ## The Solution
 
-We keep ManimCE (stable SVGs, voiceover, math support, Cairo renderer) and engineer away the slow iteration loop using **four reinforcing strategies** plus a **persistent mpv preview window**:
+We engineer away the slow iteration loop using **four reinforcing strategies** plus a **persistent mpv preview window**:
 
 | Strategy | What it does | ManimGL equivalent |
 |---|---|---|
@@ -93,6 +93,12 @@ Open **Preferences → Keyboard Shortcuts → Open Keyboard Shortcuts (JSON)** a
         "when": "editorTextFocus && editorLangId == python"
     },
     {
+        "key": "ctrl+shift+d",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: Run Scene at Cursor (Centered)",
+        "when": "editorTextFocus && editorLangId == python"
+    },
+    {
         "key": "cmd+shift+s",
         "command": "workbench.action.tasks.runTask",
         "args": "MCE: Snapshot at Cursor",
@@ -119,7 +125,7 @@ Open **Preferences → Keyboard Shortcuts → Open Keyboard Shortcuts (JSON)** a
 ]
 ```
 
-**On Windows/Linux**, replace `cmd` with `ctrl`.
+**On Windows/Linux**, replace `cmd` with `ctrl`. Note that `Ctrl+Shift+D` uses `ctrl` on all platforms (macOS included) to avoid conflicting with system shortcuts.
 
 > **Note on Cmd+Shift+S:** This overrides the default "Save As" shortcut in VSCode. If you use Save As frequently, pick a different binding (e.g., `cmd+shift+p` for "preview snapshot"). The `when` clause limits the override to Python files only, so it won't affect other file types.
 
@@ -129,8 +135,9 @@ Open **Preferences → Keyboard Shortcuts → Open Keyboard Shortcuts (JSON)** a
 
 | Shortcut | Action | Preview behavior |
 |---|---|---|
-| `Cmd+Shift+R` | **Run scene at cursor** — renders 2-3 animations around cursor position | mpv loops the rendered video clip |
-| `Cmd+Shift+S` | **Snapshot at cursor** — renders final frame as PNG | mpv shows the still image |
+| `Cmd+Shift+R` | **Run scene at cursor** — renders animations `[idx, idx+2]` around cursor | mpv loops the rendered video clip |
+| `Ctrl+Shift+D` | **Run scene at cursor (centered)** — renders `[idx-1, idx+1]`, centering on cursor animation | mpv loops the rendered video clip |
+| `Cmd+Shift+S` | **Snapshot at cursor** — auto-checkpoint at exact cursor line, renders as PNG | mpv shows the still image |
 | `Cmd+Shift+L` | **List scenes** — shows scenes, animation counts, sections in terminal | No mpv interaction |
 | `Cmd+Shift+W` | **Watch mode** — auto-renders active scene on every file save | mpv updates on every save |
 | `Cmd+Shift+F` | **Full render** — high quality render of a named scene | mpv shows the full render |
@@ -149,7 +156,7 @@ Open **Preferences → Keyboard Shortcuts → Open Keyboard Shortcuts (JSON)** a
    - Each snapshot renders in <1s and the image appears in mpv instantly
    - You're only checking spatial relationships, not animation
 
-3. **Animation phase** — use `Cmd+Shift+R` (run at cursor):
+3. **Animation phase** — use `Cmd+Shift+R` or `Ctrl+Shift+D` (run at cursor):
    - Place cursor on or near the `self.play()` call you're tuning
    - It detects the animation index and renders just 2-3 animations
    - The video appears in mpv and loops so you can watch it repeatedly
@@ -181,20 +188,20 @@ You never switch windows, never open a file browser, never close a video player.
 ### Recommended structure
 
 ```python
-# ep01_corporate_finance.py
+# ep01_intro.py
 
-class PersonalSavingsScene(Scene):
+class OpeningScene(Scene):
     """Beat 1.1"""
     def construct(self):
-        self.next_section("savings_intro")
+        self.next_section("opening")
         # ...
 
-class DebtFinancingScene(Scene):
-    """Beat 1.2 — picks up from savings scene"""
+class FollowUpScene(Scene):
+    """Beat 1.2 — picks up from opening scene"""
     def setup_state(self):
         # Reconstruct end state of previous scene (instant, no animation)
-        self.yufei = SVGMobject("assets/yufei.svg").scale(0.8).shift(LEFT*3)
-        self.add(self.yufei)
+        self.character = SVGMobject("assets/character.svg").scale(0.8).shift(LEFT*3)
+        self.add(self.character)
 
     def construct(self):
         self.setup_state()
@@ -208,8 +215,8 @@ class Dev(Scene):
         pass
 
 EPISODE_SCENE_ORDER = [
-    "PersonalSavingsScene",
-    "DebtFinancingScene",
+    "OpeningScene",
+    "FollowUpScene",
     # ...
 ]
 ```
@@ -217,7 +224,7 @@ EPISODE_SCENE_ORDER = [
 ### Production render
 
 ```bash
-python concat_render.py ep01_corporate_finance.py --quality qh --output ep01_final.mp4
+python concat_render.py ep01_intro.py --quality qh --output ep01_final.mp4
 ```
 
 ---
@@ -229,9 +236,11 @@ python concat_render.py ep01_corporate_finance.py --quality qh --output ep01_fin
 - **Keep a Dev scene** at the bottom of every file for quick experiments.
 - **Pre-build SVG assets at the right scale.** Rescaling complex SVGs at render time is slow.
 - **Snapshot (`-s`) renders the LAST frame.** If your scene ends blank, the snapshot is blank.
-- **Animation indices are 0-based** and count every `self.play()` and `self.wait()`.
+- **Animation indices are 0-based** and count every `self.play()` and `self.wait()`. Indices inside `for` loops are expanded automatically — a loop of 3 iterations with 1 `self.play()` inside counts as 3 animations.
+- **`VoiceoverScene` is auto-detected.** Scenes subclassing `VoiceoverScene` are recognised alongside `Scene`, `MovingCameraScene`, `ThreeDScene`, `ZoomedScene`, and `VectorScene`.
 - **If output looks stale**, delete the `media/` directory — cached partial movie files can become outdated when you change early animations.
 - **The mpv window size** defaults to 960x540. Edit the `--geometry` flag in `mce_dev.py` to change it, or just resize the window manually (mpv remembers).
+- **Add `._*_mce_checkpoint.py` to your `.gitignore`.** The snapshot command creates temporary checkpoint files in your scene directory. They are cleaned up automatically, but may linger if a render is killed hard.
 
 ### Checkpoint pattern for setup snapshots
 
@@ -257,11 +266,12 @@ def construct(self):
 ## Quick reference
 
 ```
-"Does this look right spatially?"          → Cmd+Shift+S  (snapshot at cursor → mpv shows image)
-"Does this animation feel right?"          → Cmd+Shift+R  (render at cursor → mpv loops video)
+"Does this look right spatially?"          → Cmd+Shift+S  (auto-checkpoint snapshot at cursor → mpv shows image)
+"Does this animation feel right?"          → Cmd+Shift+R  (render [idx, idx+2] at cursor → mpv loops video)
+"I want to see this animation in context"  → Ctrl+Shift+D (centered render [idx-1, idx+1] → mpv loops video)
 "Let me try something experimental"        → Paste in Dev scene → Cmd+Shift+R
 "How does the whole beat flow?"            → Cursor on class line → Cmd+Shift+R
-"Scene has no animations?"                 → Cmd+Shift+R  (auto-detects → shows snapshot or skips)
+"Scene has no animations?"                 → Cmd+Shift+R  (auto-detects → auto-checkpoint snapshot or skips)
 "Ship it"                                  → python concat_render.py ... --quality qh
 ```
 
@@ -278,13 +288,30 @@ Renders the scene as **video** and sends it to the mpv preview window (looping).
 | Cursor Position | Scene Content | Behavior | mpv Shows |
 |---|---|---|---|
 | On `class MyScene(Scene):` line | Has animations | Renders **full scene** as video | Looping video of entire scene |
-| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **snapshot** (fallback) | Still image of all added content |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
 | On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
 | Inside scene, on/near animation | Has animations | Renders **targeted video** of animations `[idx, idx+2]` | Looping video of 2-3 animations around cursor |
-| Inside scene, any line | No animations, has `self.add()` | Renders **snapshot** (fallback) | Still image of all added content |
+| Inside scene, any line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
 | Inside scene, any line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
 
-> **Note:** Animation index is determined by the `self.play()` / `self.wait()` call at or just before the cursor line. `self.add()` calls are not animations and do not affect the index.
+> **Note:** Animation index is determined by the `self.play()` / `self.wait()` call at or just before the cursor line. `self.add()` calls are not animations and do not affect the index. For scenes with `for` loops, iteration counts are inferred automatically so the index matches manim's runtime `-n` flag.
+
+---
+
+### `Ctrl+Shift+D` — Run Scene at Cursor (Centered)
+
+Renders the scene as **video**, but centers the animation range on the cursor rather than starting at it. Sends result to the mpv preview window (looping).
+
+| Cursor Position | Scene Content | Behavior | mpv Shows |
+|---|---|---|---|
+| On `class MyScene(Scene):` line | Has animations | Renders **full scene** as video | Looping video of entire scene |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
+| On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
+| Inside scene, on/near animation | Has animations | Renders **centered video** of animations `[idx-1, idx+1]` | Looping video of the animation at cursor + its neighbors |
+| Inside scene, any line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
+| Inside scene, any line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
+
+> **When to use `Ctrl+Shift+D` vs `Ctrl+Shift+R`:** Use `Ctrl+Shift+R` (`[idx, idx+2]`) when you're building forward and want to see what comes *after* the cursor. Use `Ctrl+Shift+D` (`[idx-1, idx+1]`) when you're tuning a specific animation and want to see it in context — one before and one after.
 
 ---
 
@@ -295,13 +322,15 @@ Renders the scene as a **still image** (last frame as PNG) and sends it to mpv.
 | Cursor Position | Scene Content | Behavior | mpv Shows |
 |---|---|---|---|
 | On `class MyScene(Scene):` line | Has animations | Renders **full scene** last frame (`-s`) | Still image after all animations complete |
-| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **full scene** last frame (`-s`) | Still image of all added content |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
 | On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
-| Inside scene, on/near animation | Has animations | Renders **up to cursor's animation** (`-n 0,{idx} -s`) | Still image after animations 0 through idx |
-| Inside scene, any line | No animations, has `self.add()` | Renders **full scene** last frame (`-s`) | Still image of all added content |
+| Inside scene, on/near animation | Has animations | Renders **auto-checkpoint snapshot** at exact cursor line | Still image of scene state at cursor line |
+| Inside scene, any line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
 | Inside scene, any line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
 
-> **Important caveat:** With `-n 0,{idx}`, manim executes all code (including `self.add()`) between animation `idx` and the *next* animation call. The `EndSceneEarlyException` is only triggered when the next `self.play()` / `self.wait()` is encountered. Non-animation code after the last rendered animation still runs. See the [checkpoint pattern](#checkpoint-pattern-for-setup-snapshots) for a workaround.
+> **How auto-checkpoint works:** Instead of using `-n 0,{idx} -s`, the tool injects `self.wait(0.01)` and `return` into a temporary copy of your file immediately after the cursor line, then renders that copy with `-s`. This captures the **exact scene state at the cursor** — including any `self.add()` calls up to that line — with no trailing code running. The temp file (`._<filename>_mce_checkpoint.py`) is created in your scene directory and automatically deleted after the render completes.
+>
+> **Fallback:** If checkpoint injection fails (e.g., cursor is outside a `construct()` body), the tool falls back to the `-n 0,{idx} -s` approach with a warning.
 
 ---
 

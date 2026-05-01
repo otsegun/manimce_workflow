@@ -21,16 +21,16 @@ Requirements:
     mpv must be installed and on PATH
 """
 
-import ast
-import sys
-import os
-import subprocess
 import argparse
+import ast
 import json
-import time
+import os
 import socket
+import subprocess
+import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Configuration
@@ -43,11 +43,11 @@ MPV_SOCKET = "/tmp/mpv-manim"
 MEDIA_DIR = "exports"
 
 QUALITY_FLAGS = {
-    "ql": "-ql",       # 480p, 15fps — fastest for iteration
-    "qm": "-qm",       # 720p, 30fps — decent preview
-    "qh": "-qh",       # 1080p, 60fps — high quality
-    "qp": "-qp",       # 1440p, 60fps — production
-    "qk": "-qk",       # 4K, 60fps — final render
+    "ql": "-ql",  # 480p, 15fps — fastest for iteration
+    "qm": "-qm",  # 720p, 30fps — decent preview
+    "qh": "-qh",  # 1080p, 60fps — high quality
+    "qp": "-qp",  # 1440p, 60fps — production
+    "qk": "-qk",  # 4K, 60fps — final render
 }
 
 QUALITY_DIR_MAP = {
@@ -62,6 +62,7 @@ QUALITY_DIR_MAP = {
 # ──────────────────────────────────────────────────────────────────────
 # Persistent mpv Preview Window (IPC)
 # ──────────────────────────────────────────────────────────────────────
+
 
 def mpv_is_alive() -> bool:
     """Check if mpv is listening on the IPC socket."""
@@ -118,6 +119,7 @@ def mpv_spawn():
         "--title=ManimCE Preview",
         "--geometry=960x540",
         "--osd-level=0",
+        "--no-sub",
     ]
 
     subprocess.Popen(
@@ -204,8 +206,10 @@ def mpv_send_file(filepath: str):
 # Output File Detection
 # ──────────────────────────────────────────────────────────────────────
 
-def find_output_file(filepath: str, scene_name: str, quality: str = "ql",
-                     is_snapshot: bool = False) -> str | None:
+
+def find_output_file(
+    filepath: str, scene_name: str, quality: str = "ql", is_snapshot: bool = False
+) -> str | None:
     """
     Locate the output file that manim just rendered.
 
@@ -255,8 +259,7 @@ def find_output_file(filepath: str, scene_name: str, quality: str = "ql",
     if base.exists():
         ext = "*.png" if is_snapshot else "*.mp4"
         all_files = list(base.rglob(ext))
-        recent = [f for f in all_files
-                  if time.time() - f.stat().st_mtime < 30]
+        recent = [f for f in all_files if time.time() - f.stat().st_mtime < 30]
         if recent:
             return str(max(recent, key=lambda p: p.stat().st_mtime))
 
@@ -266,6 +269,7 @@ def find_output_file(filepath: str, scene_name: str, quality: str = "ql",
 # ──────────────────────────────────────────────────────────────────────
 # Scene Detection: Parse .py to find Scene classes and line ranges
 # ──────────────────────────────────────────────────────────────────────
+
 
 def find_scenes(filepath: str) -> list[dict]:
     """Parse a Python file and return all Scene subclasses."""
@@ -278,8 +282,12 @@ def find_scenes(filepath: str) -> list[dict]:
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             scene_bases = {
-                "Scene", "MovingCameraScene", "ThreeDScene",
-                "ZoomedScene", "VectorScene"
+                "Scene",
+                "MovingCameraScene",
+                "ThreeDScene",
+                "ZoomedScene",
+                "VectorScene",
+                "VoiceoverScene",
             }
             for base in node.bases:
                 base_name = ""
@@ -288,11 +296,13 @@ def find_scenes(filepath: str) -> list[dict]:
                 elif isinstance(base, ast.Attribute):
                     base_name = base.attr
                 if base_name in scene_bases:
-                    scenes.append({
-                        "name": node.name,
-                        "start_line": node.lineno,
-                        "end_line": node.end_lineno or node.lineno,
-                    })
+                    scenes.append(
+                        {
+                            "name": node.name,
+                            "start_line": node.lineno,
+                            "end_line": node.end_lineno or node.lineno,
+                        }
+                    )
                     break
 
     return scenes
@@ -314,37 +324,256 @@ def scene_at_line(filepath: str, line_number: int) -> str | None:
 # Animation Index Detection
 # ──────────────────────────────────────────────────────────────────────
 
+
 def find_animation_calls(filepath: str, scene_name: str) -> list[dict]:
     """
     Find all animation calls (self.play, self.wait, etc.) in a scene's
     construct() method, with their line numbers and animation indices.
+
+    Handles `for` loops by inferring the iteration count from common
+    patterns (enumerate(x), range(n), list literals, etc.) and emitting
+    one entry per iteration so that indices match manim's runtime -n flag.
     """
     with open(filepath, "r") as f:
         source = f.read()
 
     tree = ast.parse(source)
-    anim_calls = []
     anim_methods = {"play", "wait", "play_all", "add_sound"}
 
+    # This will be populated with the construct body stmts before
+    # _resolve_var_length is ever called, enabling variable tracing.
+    construct_body: list[ast.stmt] = []
+
+    # ── helpers ──────────────────────────────────────────────────────
+
+    def _is_anim_call(node: ast.AST) -> bool:
+        """Return True if node is a self.play / self.wait / … call."""
+        if not isinstance(node, ast.Call):
+            return False
+        func = node.func
+        return (
+            isinstance(func, ast.Attribute)
+            and func.attr in anim_methods
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "self"
+        )
+
+    def _infer_loop_count(for_node: ast.For) -> int:
+        """
+        Try to figure out how many times a `for` loop executes by
+        inspecting its iterable. Returns 1 as a safe fallback.
+
+        Recognised patterns:
+            for x in enumerate(some_group):     → len via _count_iterable_arg
+            for x in some_list_literal:         → len(list)
+            for x in range(n):                  → n
+            for x in range(a, b):               → b - a     (literal ints only)
+        """
+        iter_node = for_node.iter
+
+        # range(n) / range(a, b)
+        if isinstance(iter_node, ast.Call):
+            func = iter_node.func
+            func_name = ""
+            if isinstance(func, ast.Name):
+                func_name = func.id
+            elif isinstance(func, ast.Attribute):
+                func_name = func.attr
+
+            if func_name == "range":
+                args = iter_node.args
+                if len(args) == 1 and isinstance(args[0], ast.Constant):
+                    return int(args[0].value)
+                if (
+                    len(args) >= 2
+                    and isinstance(args[0], ast.Constant)
+                    and isinstance(args[1], ast.Constant)
+                ):
+                    return max(int(args[1].value) - int(args[0].value), 1)
+
+            # enumerate(group) — try to resolve `group` to a known length
+            if func_name == "enumerate" and iter_node.args:
+                return _count_iterable_arg(iter_node.args[0])
+
+            # zip, etc. — fallback
+            return 1
+
+        # literal list / tuple
+        if isinstance(iter_node, (ast.List, ast.Tuple)):
+            return max(len(iter_node.elts), 1)
+
+        # bare name — try to resolve from construct scope
+        if isinstance(iter_node, ast.Name):
+            return _resolve_var_length(iter_node.id)
+
+        return 1
+
+    def _resolve_var_length(var_name: str) -> int:
+        """
+        Try to find the length of a variable by scanning the construct
+        body for its definition. Handles common patterns:
+          - x = [a, b, c]          → 3
+          - x = VGroup(...)        → count of args
+          - for ... in range(n): x.add(...)  → n
+          - x = make_customers(count=4)      → look for 'count' kwarg
+        """
+        for stmt in construct_body:
+            # Direct assignment: x = [a, b, c] or x = (a, b, c)
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name) and target.id == var_name:
+                        val = stmt.value
+                        if isinstance(val, (ast.List, ast.Tuple)):
+                            return max(len(val.elts), 1)
+                        # x = VGroup(...) — count positional args (only if non-empty)
+                        if (
+                            isinstance(val, ast.Call)
+                            and isinstance(val.func, ast.Name)
+                            and val.func.id in ("VGroup", "Group")
+                            and len(val.args) > 0
+                        ):
+                            return len(val.args)
+                        # x = some_func(count=N) — look for a count kwarg
+                        if isinstance(val, ast.Call):
+                            for kw in val.keywords:
+                                if kw.arg == "count" and isinstance(
+                                    kw.value, ast.Constant
+                                ):
+                                    return int(kw.value.value)
+
+            # For loop that adds to the variable:
+            #   for ... in range(n):  x.add(item)
+            #   for ... in some_list: x.add(item)
+            if isinstance(stmt, ast.For):
+                # Check if the loop body has x.add(...) calls
+                has_add = False
+                for sub in ast.walk(stmt):
+                    if (
+                        isinstance(sub, ast.Call)
+                        and isinstance(sub.func, ast.Attribute)
+                        and sub.func.attr == "add"
+                        and isinstance(sub.func.value, ast.Name)
+                        and sub.func.value.id == var_name
+                    ):
+                        has_add = True
+                        break
+                if has_add:
+                    # The loop populates x — infer count from the loop's iterable
+                    return _infer_loop_count(stmt)
+
+        return 1
+
+    def _count_iterable_arg(node: ast.AST) -> int:
+        """Attempt to resolve the length of an iterable argument."""
+        if isinstance(node, ast.Name):
+            return _resolve_var_length(node.id)
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return max(len(node.elts), 1)
+        return 1
+
+    # ── main walk (source-order DFS) ─────────────────────────────────
+
+    def _walk_body(stmts: list[ast.stmt], idx: int) -> tuple[list[dict], int]:
+        """
+        Walk a list of statements in source order. Returns the animation
+        calls found and the next available index.
+        """
+        results = []
+
+        for stmt in stmts:
+            # Direct expression statement: self.play(...) / self.wait(...)
+            if isinstance(stmt, ast.Expr) and _is_anim_call(stmt.value):
+                results.append(
+                    {
+                        "index": idx,
+                        "line": stmt.value.lineno,
+                        "method": stmt.value.func.attr,
+                    }
+                )
+                idx += 1
+                continue
+
+            # For loop — multiply inner anim calls by iteration count
+            if isinstance(stmt, ast.For):
+                loop_count = _infer_loop_count(stmt)
+
+                # First, discover how many anim calls are in one iteration
+                inner, inner_next = _walk_body(stmt.body, 0)
+                anims_per_iter = inner_next  # number of animations per loop pass
+
+                if anims_per_iter == 0:
+                    # No animations inside the loop — skip
+                    continue
+
+                # For a loop with N iterations and M anim calls per iter,
+                # manim sees N*M sequential animations.
+                # We emit one entry per runtime animation, all pointing
+                # to the same source line so that line-based lookup works.
+                for iteration in range(loop_count):
+                    for inner_call in inner:
+                        results.append(
+                            {
+                                "index": idx,
+                                "line": inner_call["line"],
+                                "method": inner_call["method"],
+                            }
+                        )
+                        idx += 1
+
+                # Also walk the else clause of the for (rare, but correct)
+                if stmt.orelse:
+                    sub, idx = _walk_body(stmt.orelse, idx)
+                    results.extend(sub)
+                continue
+
+            # If / elif / else
+            if isinstance(stmt, ast.If):
+                # We can't know which branch runs at runtime.
+                # Heuristic: assume BOTH branches can contribute animations.
+                # Count the MAX of the two branches (best guess for total).
+                then_calls, then_next = _walk_body(stmt.body, idx)
+                else_calls, else_next = _walk_body(stmt.orelse, idx)
+
+                if then_next >= else_next:
+                    results.extend(then_calls)
+                    idx = then_next
+                else:
+                    results.extend(else_calls)
+                    idx = else_next
+                continue
+
+            # With statement (e.g. with self.voiceover(...):)
+            if isinstance(stmt, ast.With):
+                sub, idx = _walk_body(stmt.body, idx)
+                results.extend(sub)
+                continue
+
+            # Try/except — walk the try body
+            if isinstance(
+                stmt,
+                (ast.Try, ast.TryFinally if hasattr(ast, "TryFinally") else ast.Try),
+            ):
+                sub, idx = _walk_body(stmt.body, idx)
+                results.extend(sub)
+                continue
+
+            # Any other compound statement with a body
+            if hasattr(stmt, "body") and isinstance(stmt.body, list):
+                sub, idx = _walk_body(stmt.body, idx)
+                results.extend(sub)
+
+        return results, idx
+
+    # Find the construct() method of the target scene
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef) and node.name == scene_name:
             for item in node.body:
                 if isinstance(item, ast.FunctionDef) and item.name == "construct":
-                    idx = 0
-                    for stmt in ast.walk(item):
-                        if isinstance(stmt, ast.Call):
-                            func = stmt.func
-                            if (isinstance(func, ast.Attribute) and
-                                func.attr in anim_methods and
-                                isinstance(func.value, ast.Name) and
-                                func.value.id == "self"):
-                                anim_calls.append({
-                                    "index": idx,
-                                    "line": stmt.lineno,
-                                    "method": func.attr,
-                                })
-                                idx += 1
-    return anim_calls
+                    construct_body.extend(item.body)
+                    calls, _ = _walk_body(item.body, 0)
+                    return calls
+
+    return []
 
 
 def animation_index_at_line(filepath: str, scene_name: str, line_number: int) -> int:
@@ -378,18 +607,151 @@ def has_visual_content(filepath: str, scene_name: str) -> bool:
             for item in node.body:
                 if isinstance(item, ast.FunctionDef) and item.name == "construct":
                     for stmt in ast.walk(item):
-                        if (isinstance(stmt, ast.Call) and
-                            isinstance(stmt.func, ast.Attribute) and
-                            stmt.func.attr == "add" and
-                            isinstance(stmt.func.value, ast.Name) and
-                            stmt.func.value.id == "self"):
+                        if (
+                            isinstance(stmt, ast.Call)
+                            and isinstance(stmt.func, ast.Attribute)
+                            and stmt.func.attr == "add"
+                            and isinstance(stmt.func.value, ast.Name)
+                            and stmt.func.value.id == "self"
+                        ):
                             return True
     return False
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Auto-Checkpoint: Exact-Line Snapshot Rendering
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _find_statement_end_line(
+    construct_node: ast.FunctionDef, line_number: int
+) -> int | None:
+    """
+    Find the end line of the innermost statement containing line_number
+    within the construct() method. Returns None if no statement found.
+    """
+    best = None
+    best_span = float("inf")
+
+    for node in ast.walk(construct_node):
+        if not hasattr(node, "lineno") or not hasattr(node, "end_lineno"):
+            continue
+        if node is construct_node:
+            continue
+        end = node.end_lineno or node.lineno
+        if node.lineno <= line_number <= end:
+            span = end - node.lineno
+            # Prefer the outermost statement-level node that still
+            # contains the cursor, not sub-expressions
+            if isinstance(node, ast.stmt) and span < best_span:
+                best = node
+                best_span = span
+
+    if best:
+        return best.end_lineno or best.lineno
+    return None
+
+
+def create_checkpoint_file(
+    filepath: str, line_number: int, scene_name: str
+) -> str | None:
+    """
+    Create a temp copy of the scene file with a checkpoint injected
+    after the cursor line. Injects:
+        self.wait(0.01)  # mce_auto_checkpoint
+        return  # mce_auto_checkpoint
+
+    This causes construct() to exit immediately after the cursor line,
+    so a snapshot (-s) captures the exact scene state at that point.
+
+    Returns the temp file path, or None if injection failed.
+    """
+    with open(filepath, "r") as f:
+        lines = f.readlines()
+
+    source = "".join(lines)
+    tree = ast.parse(source)
+
+    # Find the construct() method of the target scene
+    construct_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == scene_name:
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "construct":
+                    construct_node = item
+                    break
+            break
+
+    if not construct_node:
+        return None
+
+    # Find the end line of the statement at the cursor
+    inject_after = _find_statement_end_line(construct_node, line_number)
+
+    if inject_after is None:
+        # Cursor might be on a blank/comment line — find the nearest
+        # statement above the cursor within construct()
+        for check_line in range(line_number, construct_node.lineno, -1):
+            result = _find_statement_end_line(construct_node, check_line)
+            if result is not None:
+                inject_after = result
+                break
+
+    if inject_after is None:
+        # Cursor is before any statements in construct — inject right
+        # after the def line
+        inject_after = construct_node.lineno
+
+    # Determine indentation from the construct body
+    # (first statement in construct, or default 8 spaces)
+    if construct_node.body:
+        first_stmt = construct_node.body[0]
+        indent = len(lines[first_stmt.lineno - 1]) - len(
+            lines[first_stmt.lineno - 1].lstrip()
+        )
+    else:
+        indent = 8
+
+    indent_str = " " * indent
+    checkpoint_lines = (
+        f"{indent_str}self.wait(0.01)  # mce_auto_checkpoint\n"
+        f"{indent_str}return  # mce_auto_checkpoint\n"
+    )
+
+    # Inject after the target line
+    new_lines = lines[:inject_after] + [checkpoint_lines] + lines[inject_after:]
+
+    # Write temp file in the same directory (picks up same manim.cfg)
+    scene_dir = Path(filepath).parent
+    temp_name = f"._{Path(filepath).stem}_mce_checkpoint.py"
+    temp_path = scene_dir / temp_name
+    with open(temp_path, "w") as f:
+        f.writelines(new_lines)
+
+    return str(temp_path)
+
+
+@contextmanager
+def checkpoint_render(filepath: str, line_number: int, scene_name: str):
+    """
+    Context manager that creates a checkpoint temp file, yields it,
+    and cleans up after rendering (even on error).
+    """
+    tmp = create_checkpoint_file(filepath, line_number, scene_name)
+    try:
+        yield tmp
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Section Detection
 # ──────────────────────────────────────────────────────────────────────
+
 
 def find_sections(filepath: str, scene_name: str) -> list[dict]:
     """Find all self.next_section() calls and their names."""
@@ -397,6 +759,7 @@ def find_sections(filepath: str, scene_name: str) -> list[dict]:
         lines = f.readlines()
 
     import re
+
     sections = []
     in_scene = False
     scene_indent = 0
@@ -409,7 +772,11 @@ def find_sections(filepath: str, scene_name: str) -> list[dict]:
             continue
         if in_scene:
             current_indent = len(line) - len(line.lstrip())
-            if stripped and current_indent <= scene_indent and not stripped.startswith("#"):
+            if (
+                stripped
+                and current_indent <= scene_indent
+                and not stripped.startswith("#")
+            ):
                 in_scene = False
                 continue
             match = re.search(r'self\.next_section\(["\'](.+?)["\']\)', stripped)
@@ -423,9 +790,15 @@ def find_sections(filepath: str, scene_name: str) -> list[dict]:
 # Core Render Function
 # ──────────────────────────────────────────────────────────────────────
 
-def run_manim(filepath: str, scene_name: str, extra_args: list[str] = None,
-              quality: str = "ql", send_to_preview: bool = True,
-              dry_run: bool = False) -> str | None:
+
+def run_manim(
+    filepath: str,
+    scene_name: str,
+    extra_args: list[str] = None,
+    quality: str = "ql",
+    send_to_preview: bool = True,
+    dry_run: bool = False,
+) -> str | None:
     """
     Build and execute a manim render command.
     After rendering, automatically sends the output to the persistent
@@ -452,10 +825,10 @@ def run_manim(filepath: str, scene_name: str, extra_args: list[str] = None,
     cmd.extend([scene_filename, scene_name])
 
     cmd_str = " ".join(cmd)
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  MCE DEV | {cmd_str}")
     print(f"  CWD: {scene_dir}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     if dry_run:
         return None
@@ -485,6 +858,7 @@ def run_manim(filepath: str, scene_name: str, extra_args: list[str] = None,
 # CLI Command Handlers
 # ──────────────────────────────────────────────────────────────────────
 
+
 def cmd_run_scene(args):
     """
     Detect scene at cursor and render it.
@@ -505,10 +879,21 @@ def cmd_run_scene(args):
     # Zero-animation scene: snapshot fallback or skip
     if total_anims == 0:
         if has_visual_content(args.file, scene_name):
-            print("  No animations found, but scene has visual content -> rendering snapshot")
-            run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
+            print(
+                "  No animations found, but scene has visual content -> auto-checkpoint snapshot"
+            )
+            with checkpoint_render(args.file, args.line_number, scene_name) as tmp:
+                if tmp:
+                    run_manim(tmp, scene_name, extra_args=["-s"], quality="ql")
+                else:
+                    print(
+                        "  WARNING: Checkpoint failed, falling back to full scene snapshot"
+                    )
+                    run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
         else:
-            print("  No animations and no visual content (no self.add()). Nothing to preview.")
+            print(
+                "  No animations and no visual content (no self.add()). Nothing to preview."
+            )
         return
 
     # Cursor on class definition -> full scene video
@@ -521,12 +906,22 @@ def cmd_run_scene(args):
 
     # Cursor inside scene -> targeted animation range
     anim_idx = animation_index_at_line(args.file, scene_name, args.line_number)
-    print(f"  Animation index at cursor: {anim_idx} (of {total_anims - 1})")
-    end_idx = min(anim_idx + 2, total_anims - 1)
+    centered = getattr(args, "centered", False)
+    if centered:
+        start_idx = max(anim_idx - 1, 0)
+        end_idx = min(anim_idx + 1, total_anims - 1)
+        print(
+            f"  Animation index at cursor: {anim_idx} (of {total_anims - 1}) [centered range]"
+        )
+    else:
+        start_idx = anim_idx
+        end_idx = min(anim_idx + 2, total_anims - 1)
+        print(f"  Animation index at cursor: {anim_idx} (of {total_anims - 1})")
     run_manim(
-        args.file, scene_name,
-        extra_args=["-n", f"{anim_idx},{end_idx}"],
-        quality=args.quality
+        args.file,
+        scene_name,
+        extra_args=["-n", f"{start_idx},{end_idx}"],
+        quality=args.quality,
     )
 
 
@@ -551,10 +946,19 @@ def cmd_snapshot(args):
     # Zero-animation scene
     if total_anims == 0:
         if has_visual_content(args.file, scene_name):
-            print("  No animations, but scene has visual content -> full scene snapshot")
-            run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
+            print("  No animations, has visual content -> auto-checkpoint snapshot")
+            with checkpoint_render(args.file, args.line_number, scene_name) as tmp:
+                if tmp:
+                    run_manim(tmp, scene_name, extra_args=["-s"], quality="ql")
+                else:
+                    print(
+                        "  WARNING: Checkpoint failed, falling back to full scene snapshot"
+                    )
+                    run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
         else:
-            print("  No animations and no visual content (no self.add()). Nothing to preview.")
+            print(
+                "  No animations and no visual content (no self.add()). Nothing to preview."
+            )
         return
 
     # Cursor on class definition -> full scene snapshot
@@ -565,34 +969,42 @@ def cmd_snapshot(args):
             run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
             return
 
-    # Cursor inside scene -> snapshot up to the animation at cursor
-    anim_idx = animation_index_at_line(args.file, scene_name, args.line_number)
-    print(f"  Snapshot up to animation {anim_idx} (of {total_anims - 1})")
-    run_manim(
-        args.file, scene_name,
-        extra_args=["-n", f"0,{anim_idx}", "-s"],
-        quality="ql"
-    )
+    # Cursor inside scene -> auto-checkpoint snapshot at exact cursor line
+    print(f"  Auto-checkpoint snapshot at line {args.line_number}")
+    with checkpoint_render(args.file, args.line_number, scene_name) as tmp:
+        if tmp:
+            run_manim(tmp, scene_name, extra_args=["-s"], quality="ql")
+        else:
+            # Fallback to the old -n approach if checkpoint creation fails
+            anim_idx = animation_index_at_line(args.file, scene_name, args.line_number)
+            print(f"  WARNING: Checkpoint failed, falling back to -n 0,{anim_idx} -s")
+            run_manim(
+                args.file,
+                scene_name,
+                extra_args=["-n", f"0,{anim_idx}", "-s"],
+                quality="ql",
+            )
 
 
 def cmd_render_range(args):
     """Render a specific animation range. Result appears in mpv."""
     run_manim(
-        args.file, args.scene_name,
+        args.file,
+        args.scene_name,
         extra_args=["-n", f"{args.start},{args.end}"],
-        quality=args.quality
+        quality=args.quality,
     )
 
 
 def cmd_render_section(args):
     """Render scene with sections saved. Result appears in mpv."""
     run_manim(
-        args.file, args.scene_name,
-        extra_args=["--save_sections"],
-        quality=args.quality
+        args.file, args.scene_name, extra_args=["--save_sections"], quality=args.quality
     )
-    print(f"\n  Section files saved. Look for '{args.section_name}' "
-          f"in the sections/ output directory.")
+    print(
+        f"\n  Section files saved. Look for '{args.section_name}' "
+        f"in the sections/ output directory."
+    )
 
 
 def cmd_render_full(args):
@@ -608,13 +1020,15 @@ def cmd_list_scenes(args):
         return
 
     print(f"\n  Scenes in {args.file}:")
-    print(f"  {'─'*50}")
+    print(f"  {'─' * 50}")
     for s in scenes:
         anims = find_animation_calls(args.file, s["name"])
         sections = find_sections(args.file, s["name"])
         print(f"  {s['name']}")
-        print(f"    Lines {s['start_line']}–{s['end_line']} | "
-              f"{len(anims)} animations | {len(sections)} sections")
+        print(
+            f"    Lines {s['start_line']}–{s['end_line']} | "
+            f"{len(anims)} animations | {len(sections)} sections"
+        )
         if sections:
             for sec in sections:
                 print(f"      § {sec['name']} (line {sec['line']})")
@@ -628,8 +1042,8 @@ def cmd_dev(args):
     Control which scene renders by editing .mce_dev_state.json.
     """
     try:
-        from watchdog.observers import Observer
         from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
     except ImportError:
         print("ERROR: watchdog not installed. Run: pip install watchdog")
         sys.exit(1)
@@ -646,23 +1060,28 @@ def cmd_dev(args):
             sys.exit(1)
 
     state_file = Path(filepath).parent / ".mce_dev_state.json"
-    state_file.write_text(json.dumps({
-        "active_scene": active_scene,
-        "quality": "ql",
-        "mode": "full",      # "full", "snapshot", or "range"
-        "range_start": 0,
-        "range_end": -1,
-    }, indent=2))
+    state_file.write_text(
+        json.dumps(
+            {
+                "active_scene": active_scene,
+                "quality": "ql",
+                "mode": "full",  # "full", "snapshot", or "range"
+                "range_start": 0,
+                "range_end": -1,
+            },
+            indent=2,
+        )
+    )
 
-    print(f"\n{'='*60}")
-    print(f"  MCE DEV WATCH MODE")
+    print(f"\n{'=' * 60}")
+    print("  MCE DEV WATCH MODE")
     print(f"  Watching: {filepath}")
     print(f"  Active scene: {active_scene}")
     print(f"  State file: {state_file}")
-    print(f"{'='*60}")
-    print(f"  Edit .mce_dev_state.json to change scene or mode.")
-    print(f"  Preview updates in the mpv window on every save.")
-    print(f"  Press Ctrl+C to stop.\n")
+    print(f"{'=' * 60}")
+    print("  Edit .mce_dev_state.json to change scene or mode.")
+    print("  Preview updates in the mpv window on every save.")
+    print("  Press Ctrl+C to stop.\n")
 
     class RenderOnChange(FileSystemEventHandler):
         def __init__(self):
@@ -700,9 +1119,13 @@ def cmd_dev(args):
                     extra = ["-n", f"{s}"]
 
             try:
-                run_manim(filepath, scene,
-                          extra_args=extra if extra else None,
-                          quality=quality, send_to_preview=True)
+                run_manim(
+                    filepath,
+                    scene,
+                    extra_args=extra if extra else None,
+                    quality=quality,
+                    send_to_preview=True,
+                )
             except Exception as e:
                 print(f"  Render error: {e}")
 
@@ -724,6 +1147,7 @@ def cmd_dev(args):
 # CLI Argument Parsing
 # ──────────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="ManimCE Fast Development Workflow",
@@ -739,7 +1163,7 @@ Examples:
 All render commands automatically send output to a persistent mpv
 preview window. mpv is spawned on the first render and reused for
 all subsequent renders (video and images, same window).
-        """
+        """,
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -748,6 +1172,11 @@ all subsequent renders (video and images, same window).
     p.add_argument("file", help="Path to .py file")
     p.add_argument("line_number", type=int, help="Current cursor line number")
     p.add_argument("--quality", default="ql", choices=QUALITY_FLAGS.keys())
+    p.add_argument(
+        "--centered",
+        action="store_true",
+        help="Center animation range around cursor (1 before + 1 after)",
+    )
     p.set_defaults(func=cmd_run_scene)
 
     # snapshot

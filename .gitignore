@@ -1,16 +1,23 @@
-manim/media/
-*exports/
-*tmp/
+# Manim output
+exports/
+tmpTex/
+tmp/
 
-.idea
+# Auto-checkpoint temp files (created by mce_dev.py snapshot command)
+._*_mce_checkpoint.py
 
-postproduction/rendered-files
+# Dev watch mode state
+.mce_dev_state.json
 
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+.venv/
+.python-version
+
+# Editor
+.idea/
 *.code-workspace
+.vscode/settings.json
 
-
-*tmpTex

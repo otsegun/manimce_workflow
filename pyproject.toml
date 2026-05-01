@@ -1,0 +1,10 @@
+[project]
+name = "manimce-workflow"
+version = "0.1.0"
+description = "A fast development workflow for ManimCE that approximates ManimGL's interactive experience."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "manim",
+    "watchdog",
+]
