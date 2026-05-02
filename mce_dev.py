@@ -876,7 +876,22 @@ def cmd_run_scene(args):
 
     total_anims = len(find_animation_calls(args.file, scene_name))
 
-    # Zero-animation scene: snapshot fallback or skip
+    # Cursor on class definition -> full scene (checked before zero-anim branch
+    # so a static-only scene still renders its full content, not an empty frame)
+    scenes = find_scenes(args.file)
+    for s in scenes:
+        if s["start_line"] == args.line_number:
+            print("  Cursor on class definition -> rendering full scene")
+            if total_anims > 0:
+                run_manim(args.file, scene_name, quality=args.quality)
+            elif has_visual_content(args.file, scene_name):
+                print("  No animations, rendering full scene snapshot")
+                run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
+            else:
+                print("  No visual content. Nothing to preview.")
+            return
+
+    # Zero-animation scene (cursor inside scene body): checkpoint snapshot or skip
     if total_anims == 0:
         if has_visual_content(args.file, scene_name):
             print(
@@ -895,14 +910,6 @@ def cmd_run_scene(args):
                 "  No animations and no visual content (no self.add()). Nothing to preview."
             )
         return
-
-    # Cursor on class definition -> full scene video
-    scenes = find_scenes(args.file)
-    for s in scenes:
-        if s["start_line"] == args.line_number:
-            print("  Cursor on class definition -> rendering full scene")
-            run_manim(args.file, scene_name, quality=args.quality)
-            return
 
     # Cursor inside scene -> targeted animation range
     anim_idx = animation_index_at_line(args.file, scene_name, args.line_number)
@@ -943,7 +950,19 @@ def cmd_snapshot(args):
 
     total_anims = len(find_animation_calls(args.file, scene_name))
 
-    # Zero-animation scene
+    # Cursor on class definition -> full scene snapshot (checked before zero-anim
+    # branch so a static-only scene renders its full content, not an empty frame)
+    scenes = find_scenes(args.file)
+    for s in scenes:
+        if s["start_line"] == args.line_number:
+            print("  Cursor on class definition -> full scene snapshot")
+            if total_anims > 0 or has_visual_content(args.file, scene_name):
+                run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
+            else:
+                print("  No visual content. Nothing to preview.")
+            return
+
+    # Zero-animation scene (cursor inside scene body): checkpoint snapshot or skip
     if total_anims == 0:
         if has_visual_content(args.file, scene_name):
             print("  No animations, has visual content -> auto-checkpoint snapshot")
@@ -960,14 +979,6 @@ def cmd_snapshot(args):
                 "  No animations and no visual content (no self.add()). Nothing to preview."
             )
         return
-
-    # Cursor on class definition -> full scene snapshot
-    scenes = find_scenes(args.file)
-    for s in scenes:
-        if s["start_line"] == args.line_number:
-            print("  Cursor on class definition -> full scene snapshot")
-            run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
-            return
 
     # Cursor inside scene -> auto-checkpoint snapshot at exact cursor line
     print(f"  Auto-checkpoint snapshot at line {args.line_number}")
@@ -1005,7 +1016,22 @@ def cmd_video_checkpoint(args):
 
     total_anims = len(find_animation_calls(args.file, scene_name))
 
-    # Zero-animation scene
+    # Cursor on class definition -> full scene (checked before zero-anim branch
+    # so a static-only scene renders its full content, not an empty frame)
+    scenes = find_scenes(args.file)
+    for s in scenes:
+        if s["start_line"] == args.line_number:
+            print("  Cursor on class definition -> rendering full scene")
+            if total_anims > 0:
+                run_manim(args.file, scene_name, quality=args.quality)
+            elif has_visual_content(args.file, scene_name):
+                print("  No animations, rendering full scene snapshot")
+                run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
+            else:
+                print("  No visual content. Nothing to preview.")
+            return
+
+    # Zero-animation scene (cursor inside scene body): checkpoint snapshot or skip
     if total_anims == 0:
         if has_visual_content(args.file, scene_name):
             print("  No animations, has visual content -> checkpoint snapshot (image)")
@@ -1017,14 +1043,6 @@ def cmd_video_checkpoint(args):
         else:
             print("  No animations and no visual content. Nothing to preview.")
         return
-
-    # Cursor on class definition -> render everything
-    scenes = find_scenes(args.file)
-    for s in scenes:
-        if s["start_line"] == args.line_number:
-            print("  Cursor on class definition -> rendering full scene to video")
-            run_manim(args.file, scene_name, quality=args.quality)
-            return
 
     # Cursor inside scene -> checkpoint video up to cursor line
     print(f"  Checkpoint video up to line {args.line_number}")

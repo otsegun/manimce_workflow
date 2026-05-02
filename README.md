@@ -303,7 +303,7 @@ Renders the scene as **video** and sends it to the mpv preview window (looping).
 | Cursor Position | Scene Content | Behavior | mpv Shows |
 |---|---|---|---|
 | On `class MyScene(Scene):` line | Has animations | Renders **full scene** as video | Looping video of entire scene |
-| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **full scene snapshot** | Still image of complete scene |
 | On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
 | Inside scene, on/near animation | Has animations | Renders **targeted video** of animations `[idx, idx+2]` | Looping video of 2-3 animations around cursor |
 | Inside scene, any line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
@@ -320,7 +320,7 @@ Renders the scene as **video**, but centers the animation range on the cursor ra
 | Cursor Position | Scene Content | Behavior | mpv Shows |
 |---|---|---|---|
 | On `class MyScene(Scene):` line | Has animations | Renders **full scene** as video | Looping video of entire scene |
-| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **full scene snapshot** | Still image of complete scene |
 | On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
 | Inside scene, on/near animation | Has animations | Renders **centered video** of animations `[idx-1, idx+1]` | Looping video of the animation at cursor + its neighbors |
 | Inside scene, any line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
@@ -337,7 +337,7 @@ Renders the scene as **video up to the cursor line** using the same checkpoint m
 | Cursor Position | Scene Content | Behavior | mpv Shows |
 |---|---|---|---|
 | On `class MyScene(Scene):` line | Has animations | Renders **full scene** as video | Looping video of entire scene |
-| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **full scene snapshot** | Still image of complete scene |
 | On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
 | Inside scene, on/near animation | Has animations | Renders **checkpoint video** from start of scene up to cursor line | Looping video of everything up to cursor |
 | Inside scene, any line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
@@ -358,7 +358,7 @@ Renders the scene as a **still image** (last frame as PNG) and sends it to mpv.
 | Cursor Position | Scene Content | Behavior | mpv Shows |
 |---|---|---|---|
 | On `class MyScene(Scene):` line | Has animations | Renders **full scene** last frame (`-s`) | Still image after all animations complete |
-| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **full scene snapshot** | Still image of complete scene |
 | On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
 | Inside scene, on/near animation | Has animations | Renders **auto-checkpoint snapshot** at exact cursor line | Still image of scene state at cursor line |
 | Inside scene, any line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
