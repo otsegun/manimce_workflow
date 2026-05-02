@@ -986,6 +986,63 @@ def cmd_snapshot(args):
             )
 
 
+def cmd_video_checkpoint(args):
+    """
+    Render a video up to the cursor line using the checkpoint mechanism.
+    - Cursor on class definition line -> full scene video (or snapshot if
+      no animations, or skip if truly empty)
+    - Cursor inside scene, has animations -> checkpoint temp file rendered
+      to video that stops exactly at the cursor line
+    - No animations, has self.add() -> checkpoint snapshot (image fallback)
+    - No animations, no self.add() -> nothing to preview
+    """
+    scene_name = scene_at_line(args.file, args.line_number)
+    if not scene_name:
+        print(f"ERROR: No Scene class found at line {args.line_number}")
+        sys.exit(1)
+
+    print(f"  Video to cursor: {scene_name} (line {args.line_number})")
+
+    total_anims = len(find_animation_calls(args.file, scene_name))
+
+    # Zero-animation scene
+    if total_anims == 0:
+        if has_visual_content(args.file, scene_name):
+            print("  No animations, has visual content -> checkpoint snapshot (image)")
+            with checkpoint_render(args.file, args.line_number, scene_name) as tmp:
+                if tmp:
+                    run_manim(tmp, scene_name, extra_args=["-s"], quality="ql")
+                else:
+                    run_manim(args.file, scene_name, extra_args=["-s"], quality="ql")
+        else:
+            print("  No animations and no visual content. Nothing to preview.")
+        return
+
+    # Cursor on class definition -> render everything
+    scenes = find_scenes(args.file)
+    for s in scenes:
+        if s["start_line"] == args.line_number:
+            print("  Cursor on class definition -> rendering full scene to video")
+            run_manim(args.file, scene_name, quality=args.quality)
+            return
+
+    # Cursor inside scene -> checkpoint video up to cursor line
+    print(f"  Checkpoint video up to line {args.line_number}")
+    with checkpoint_render(args.file, args.line_number, scene_name) as tmp:
+        if tmp:
+            run_manim(tmp, scene_name, quality=args.quality)
+        else:
+            # Fallback: render from animation 0 to the index at cursor
+            anim_idx = animation_index_at_line(args.file, scene_name, args.line_number)
+            print(f"  WARNING: Checkpoint failed, falling back to -n 0,{anim_idx}")
+            run_manim(
+                args.file,
+                scene_name,
+                extra_args=["-n", f"0,{anim_idx}"],
+                quality=args.quality,
+            )
+
+
 def cmd_render_range(args):
     """Render a specific animation range. Result appears in mpv."""
     run_manim(
@@ -1184,6 +1241,15 @@ all subsequent renders (video and images, same window).
     p.add_argument("file", help="Path to .py file")
     p.add_argument("line_number", type=int, help="Current cursor line number")
     p.set_defaults(func=cmd_snapshot)
+
+    # video_checkpoint
+    p = subparsers.add_parser(
+        "video_checkpoint", help="Render video up to cursor line"
+    )
+    p.add_argument("file", help="Path to .py file")
+    p.add_argument("line_number", type=int, help="Current cursor line number")
+    p.add_argument("--quality", default="ql", choices=QUALITY_FLAGS.keys())
+    p.set_defaults(func=cmd_video_checkpoint)
 
     # render_range
     p = subparsers.add_parser("render_range", help="Render specific animation range")

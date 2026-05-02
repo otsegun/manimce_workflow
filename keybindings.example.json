@@ -19,6 +19,12 @@
         "when": "editorTextFocus && editorLangId == python"
     },
     {
+        "key": "ctrl+shift+v",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: Video to Cursor",
+        "when": "editorTextFocus && editorLangId == python"
+    },
+    {
         "key": "ctrl+alt+l",
         "command": "workbench.action.tasks.runTask",
         "args": "MCE: List Scenes",

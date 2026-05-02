@@ -18,6 +18,7 @@ We engineer away the slow iteration loop using **four reinforcing strategies** p
 | State reconstruction | `setup_state()` rebuilds prior state instantly | `checkpoint_paste()` state restore |
 | Targeted rendering | `-n START,END` renders only specific animations | Running code from a checkpoint |
 | Snapshot mode | `-s` renders only the last frame as PNG | Visual inspection without animation |
+| **Checkpoint video** | Injects a `return` at cursor, renders video up to that exact line | Scrubbing to a point in the scene |
 | **Persistent mpv window** | Single preview window that updates in-place | Interactive scene window |
 
 Combined iteration loop: **edit → keyboard shortcut → 2-5 seconds → mpv updates in-place**.
@@ -99,6 +100,12 @@ Open **Preferences → Keyboard Shortcuts → Open Keyboard Shortcuts (JSON)** a
         "when": "editorTextFocus && editorLangId == python"
     },
     {
+        "key": "ctrl+shift+v",
+        "command": "workbench.action.tasks.runTask",
+        "args": "MCE: Video to Cursor",
+        "when": "editorTextFocus && editorLangId == python"
+    },
+    {
         "key": "cmd+shift+s",
         "command": "workbench.action.tasks.runTask",
         "args": "MCE: Snapshot at Cursor",
@@ -125,7 +132,7 @@ Open **Preferences → Keyboard Shortcuts → Open Keyboard Shortcuts (JSON)** a
 ]
 ```
 
-**On Windows/Linux**, replace `cmd` with `ctrl`. Note that `Ctrl+Shift+D` uses `ctrl` on all platforms (macOS included) to avoid conflicting with system shortcuts.
+**On Windows/Linux**, replace `cmd` with `ctrl`. Note that `Ctrl+Shift+D` and `Ctrl+Shift+V` use `ctrl` on all platforms (macOS included) to avoid conflicting with system shortcuts.
 
 > **Note on Cmd+Shift+S:** This overrides the default "Save As" shortcut in VSCode. If you use Save As frequently, pick a different binding (e.g., `cmd+shift+p` for "preview snapshot"). The `when` clause limits the override to Python files only, so it won't affect other file types.
 
@@ -137,6 +144,7 @@ Open **Preferences → Keyboard Shortcuts → Open Keyboard Shortcuts (JSON)** a
 |---|---|---|
 | `Cmd+Shift+R` | **Run scene at cursor** — renders animations `[idx, idx+2]` around cursor | mpv loops the rendered video clip |
 | `Ctrl+Shift+D` | **Run scene at cursor (centered)** — renders `[idx-1, idx+1]`, centering on cursor animation | mpv loops the rendered video clip |
+| `Ctrl+Shift+V` | **Video to cursor** — auto-checkpoint at exact cursor line, renders video up to that point | mpv loops video of scene up to cursor |
 | `Cmd+Shift+S` | **Snapshot at cursor** — auto-checkpoint at exact cursor line, renders as PNG | mpv shows the still image |
 | `Cmd+Shift+L` | **List scenes** — shows scenes, animation counts, sections in terminal | No mpv interaction |
 | `Cmd+Shift+W` | **Watch mode** — auto-renders active scene on every file save | mpv updates on every save |
@@ -162,11 +170,16 @@ Open **Preferences → Keyboard Shortcuts → Open Keyboard Shortcuts (JSON)** a
    - The video appears in mpv and loops so you can watch it repeatedly
    - Tweak timing, easing, transforms — press the shortcut again to see changes
 
-4. **Review phase** — cursor on the class definition line, press `Cmd+Shift+R`:
+4. **Sequence check phase** — use `Ctrl+Shift+V` (video to cursor):
+   - Place cursor anywhere in the scene — the rendered video covers everything from the start up to that exact line
+   - Use this when you want to verify that a run of animations flows correctly, not just the 2-3 around the cursor
+   - Equivalent to asking "does everything up to here look right?" rather than "does this one animation look right?"
+
+5. **Review phase** — cursor on the class definition line, press `Cmd+Shift+R`:
    - When cursor is on the `class MyScene(Scene):` line, it renders the full scene
    - Watch the whole beat play through in mpv (looping)
 
-5. **Polish + voiceover** — `Cmd+Shift+F` for high quality render.
+6. **Polish + voiceover** — `Cmd+Shift+F` for high quality render.
 
 ### The mpv window in practice
 
@@ -177,6 +190,7 @@ edit code → Cmd+Shift+R → eyes shift to mpv (2-3s wait) → watch loop
 → "that easing is wrong" → edit code → Cmd+Shift+R → watch again
 → "positioning is off" → edit code → Cmd+Shift+S → see snapshot
 → "that's right" → Cmd+Shift+R → confirm with animation
+→ "does the whole sequence flow?" → Ctrl+Shift+V → watch video up to cursor
 ```
 
 You never switch windows, never open a file browser, never close a video player. The preview just *updates*.
@@ -269,6 +283,7 @@ def construct(self):
 "Does this look right spatially?"          → Cmd+Shift+S  (auto-checkpoint snapshot at cursor → mpv shows image)
 "Does this animation feel right?"          → Cmd+Shift+R  (render [idx, idx+2] at cursor → mpv loops video)
 "I want to see this animation in context"  → Ctrl+Shift+D (centered render [idx-1, idx+1] → mpv loops video)
+"Does everything up to here flow right?"   → Ctrl+Shift+V (checkpoint video up to cursor → mpv loops video)
 "Let me try something experimental"        → Paste in Dev scene → Cmd+Shift+R
 "How does the whole beat flow?"            → Cursor on class line → Cmd+Shift+R
 "Scene has no animations?"                 → Cmd+Shift+R  (auto-detects → auto-checkpoint snapshot or skips)
@@ -312,6 +327,27 @@ Renders the scene as **video**, but centers the animation range on the cursor ra
 | Inside scene, any line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
 
 > **When to use `Ctrl+Shift+D` vs `Ctrl+Shift+R`:** Use `Ctrl+Shift+R` (`[idx, idx+2]`) when you're building forward and want to see what comes *after* the cursor. Use `Ctrl+Shift+D` (`[idx-1, idx+1]`) when you're tuning a specific animation and want to see it in context — one before and one after.
+
+---
+
+### `Ctrl+Shift+V` — Video to Cursor
+
+Renders the scene as **video up to the cursor line** using the same checkpoint mechanism as `Ctrl+Shift+S`, but outputs video instead of an image. Sends result to the mpv preview window (looping).
+
+| Cursor Position | Scene Content | Behavior | mpv Shows |
+|---|---|---|---|
+| On `class MyScene(Scene):` line | Has animations | Renders **full scene** as video | Looping video of entire scene |
+| On `class MyScene(Scene):` line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
+| On `class MyScene(Scene):` line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
+| Inside scene, on/near animation | Has animations | Renders **checkpoint video** from start of scene up to cursor line | Looping video of everything up to cursor |
+| Inside scene, any line | No animations, has `self.add()` | Renders **auto-checkpoint snapshot** at cursor line | Still image of scene state at cursor |
+| Inside scene, any line | No animations, no `self.add()` | Prints "nothing to preview" | Nothing sent to mpv |
+
+> **How it differs from `Ctrl+Shift+R`:** `Ctrl+Shift+R` renders a small window of 2-3 animations starting at the cursor — useful for fast iteration on a specific animation. `Ctrl+Shift+V` renders the full sequence from the beginning up to the cursor — useful for checking that a run of animations flows correctly as a whole. Both produce a video; only the scope differs.
+>
+> **How it differs from `Ctrl+Shift+S`:** Both use the same checkpoint injection (injecting `self.wait(0.01)` + `return` at the cursor line into a temp copy of the file). `Ctrl+Shift+S` adds `-s` for a still image of the last frame; `Ctrl+Shift+V` omits `-s` and keeps the video. Use `Ctrl+Shift+V` when timing and motion matter; use `Ctrl+Shift+S` when you only care about spatial layout.
+>
+> **Fallback:** If checkpoint injection fails, the tool falls back to `-n 0,{idx}` with a warning, rendering animations 0 through the index at the cursor.
 
 ---
 
