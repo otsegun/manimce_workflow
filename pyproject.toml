@@ -8,3 +8,7 @@ dependencies = [
     "manim",
     "watchdog",
 ]
+
+[tool.ruff.lint]
+ignore = ["F403", "F405"]
+
